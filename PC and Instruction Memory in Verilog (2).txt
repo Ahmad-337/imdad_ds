@@ -1,0 +1,133 @@
+ #### Program Counter  Code #####
+
+timescale 1ns / 1ps
+module program_counter(
+    input clk, 
+    input reset, 
+    output reg [31:0] count 
+);
+always @(posedge clk) begin
+    if (reset) // if reset is high, reset the count to 0
+        count <= 32'b0;
+    else // else, increment the count
+        count <= count + 4;
+end
+endmodule
+
+##### Test Bench ######
+
+`timescale 1ns / 1ps
+module program_counter_tb;
+
+	// Inputs
+	reg clk;
+	reg reset;
+	// Outputs
+	wire [31:0] count;
+	// Instantiate the Unit Under Test (UUT)
+	program_counter uut (
+		.clk(clk), 
+		.reset(reset), 
+		.count(count)
+	);
+
+		initial begin
+    clk = 1'b0; // initialize clock to 0
+    reset = 1'b1; // set reset high initially, This makes sure your program counter gets set to zero when simulation starts
+    #10 reset = 1'b0; // release reset after 10 ticks, Then, set reset to 0 (inactive), so the counter can start incrementing.
+	 #200 $finish;
+ end
+
+always #5 clk = ~clk; // toggle clock every 5 time units
+      endmodule
+
+
+
+#### Instruction Memory Code ### 
+// Instruction Memory with reset block
+`timescale 1ns / 1ps
+module INST_MEM(
+    input clk,                 // clock input
+    input reset,               // synchronous reset
+    input [31:0] PC,           // program counter
+    output reg [31:0] Instruction_Code  // instruction output
+);
+
+    reg [7:0] Memory [31:0];  // byte-addressable memory
+
+    // Synchronous reset: initialize memory
+    always @(posedge clk) begin
+        if (reset) begin
+            // Instruction 0: add t1, s0, s1
+            Memory[0]  <= 8'h33; Memory[1]  <= 8'h03; Memory[2]  <= 8'h94; Memory[3]  <= 8'h00;
+            // Instruction 1: sub t2, s2, s3
+            Memory[4]  <= 8'hb3; Memory[5]  <= 8'h03; Memory[6]  <= 8'h39; Memory[7]  <= 8'h41;
+            // Instruction 2: mul t0, s4, s5
+            Memory[8]  <= 8'hb3; Memory[9]  <= 8'h02; Memory[10] <= 8'h5a; Memory[11] <= 8'h03;
+            // Instruction 3: xor t3, s6, s7
+            Memory[12] <= 8'h33; Memory[13] <= 8'h4e; Memory[14] <= 8'h7b; Memory[15] <= 8'h01;
+            // Instruction 4: sll t4, s8, s9
+            Memory[16] <= 8'hb3; Memory[17] <= 8'h1e; Memory[18] <= 8'h9c; Memory[19] <= 8'h01;
+            // Instruction 5: srl t5, s10, s11
+            Memory[20] <= 8'h33; Memory[21] <= 8'h5f; Memory[22] <= 8'hbd; Memory[23] <= 8'h01;
+            // Instruction 6: and t6, a2, a3
+            Memory[24] <= 8'hb3; Memory[25] <= 8'h7f; Memory[26] <= 8'hd6; Memory[27] <= 8'h00;
+            // Instruction 7: or a7, a4, a5
+            Memory[28] <= 8'hb3; Memory[29] <= 8'h68; Memory[30] <= 8'hf7; Memory[31] <= 8'h00;
+
+            // Clear output on reset
+            Instruction_Code <= 32'h00000000;
+        end
+        else begin
+            // Fetch instruction on PC
+            Instruction_Code <= {Memory[PC+3], Memory[PC+2], Memory[PC+1], Memory[PC]};
+        end
+    end
+
+
+##### Test Bench ##### 
+`timescale 1ns / 1ps
+module INST_MEM_tb;
+
+    reg clk;
+    reg reset;
+    reg [31:0] PC;
+    wire [31:0] Instruction_Code;
+
+    // Instantiate the design
+    INST_MEM uut(
+        .clk(clk),
+        .reset(reset),
+        .PC(PC),
+        .Instruction_Code(Instruction_Code)
+    );
+
+    // Clock generation: 10ns period
+    initial clk = 0;
+    always #5 clk = ~clk;  // 100 MHz equivalent
+
+    // Test sequence
+    initial begin
+        $display("Time\tPC\t\tInstruction_Code");
+
+        // Reset memory
+        reset = 1;
+        PC = 0;
+        #10;           // one clock cycle
+        reset = 0;
+
+        // Read instructions sequentially
+        #10 PC = 0;
+        #10 PC = 4;
+        #10 PC = 8;
+        #10 PC = 12;
+        #10 PC = 16;
+        #10 PC = 20;
+        #10 PC = 24;
+        #10 PC = 28;
+
+        #10 $finish;
+    end
+
+
+endmodule

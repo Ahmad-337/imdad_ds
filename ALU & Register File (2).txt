@@ -1,0 +1,277 @@
+####################################################################
+################## Design Code - Reg. File #########################
+####################################################################
+
+`timescale 1ns / 1ps
+module REG_FILE(
+    input [4:0] read_reg_num1,
+    input [4:0] read_reg_num2,
+    input [4:0] write_reg,
+    input [31:0] write_data,
+    output [31:0] read_data1,
+    output [31:0] read_data2,
+    input regwrite,
+    input clock,
+    input reset
+);
+    reg [31:0] reg_memory [31:0];
+
+   ///// integer i;
+
+    // Initialize or write registers
+    always @(posedge clock or posedge reset) begin
+        if (reset) begin
+            reg_memory[0]  <= 32'd0;
+            reg_memory[1]  <= 32'd1;
+            reg_memory[2]  <= 32'd2;
+            reg_memory[3]  <= 32'd3;
+            reg_memory[4]  <= 32'd4;
+            reg_memory[5]  <= 32'd5;
+            reg_memory[6]  <= 32'd6;
+            reg_memory[7]  <= 32'd7;
+            reg_memory[8]  <= 32'd8;
+            reg_memory[9]  <= 32'd9;
+            reg_memory[10] <= 32'd10;
+            reg_memory[11] <= 32'd11;
+            reg_memory[12] <= 32'd12;
+            reg_memory[13] <= 32'd13;
+            reg_memory[14] <= 32'd14;
+            reg_memory[15] <= 32'd15;
+            reg_memory[16] <= 32'd16;
+            reg_memory[17] <= 32'd17;
+            reg_memory[18] <= 32'd18;
+            reg_memory[19] <= 32'd19;
+            reg_memory[20] <= 32'd20;
+            reg_memory[21] <= 32'd21;
+            reg_memory[22] <= 32'd22;
+            reg_memory[23] <= 32'd23;
+            reg_memory[24] <= 32'd24;
+            reg_memory[25] <= 32'd25;
+            reg_memory[26] <= 32'd26;
+            reg_memory[27] <= 32'd27;
+            reg_memory[28] <= 32'd28;
+            reg_memory[29] <= 32'd29;
+            reg_memory[30] <= 32'd30;
+            reg_memory[31] <= 32'd31;
+        end 
+        else if (regwrite && (write_reg != 0)) begin
+            reg_memory[write_reg] <= write_data;
+        end
+    end
+
+    // Continuous read
+    assign read_data1 = reg_memory[read_reg_num1];
+    assign read_data2 = reg_memory[read_reg_num2];
+
+endmodule
+
+####################################################################
+################## Testbench - Reg. File #########################
+####################################################################
+
+`timescale 1ns / 1ps
+
+module REG_FILE_TB;
+
+    // Testbench signals
+    reg [4:0] read_reg_num1;
+    reg [4:0] read_reg_num2;
+    reg [4:0] write_reg;
+    reg [31:0] write_data;
+    reg regwrite;
+    reg clock;
+    reg reset;
+    wire [31:0] read_data1;
+    wire [31:0] read_data2;
+
+    // Instantiate the Register File module
+    REG_FILE uut (
+        .read_reg_num1(read_reg_num1),
+        .read_reg_num2(read_reg_num2),
+        .write_reg(write_reg),
+        .write_data(write_data),
+        .read_data1(read_data1),
+        .read_data2(read_data2),
+        .regwrite(regwrite),
+        .clock(clock),
+        .reset(reset)
+    );
+
+    // Clock generation (period = 10ns)
+    always #5 clock = ~clock;
+
+    // Test sequence
+    initial begin
+        // Initialize signals
+        clock = 0;
+        regwrite = 0;
+        reset = 1;
+        read_reg_num1 = 0;
+        read_reg_num2 = 0;
+        write_reg = 0;
+        write_data = 0;
+
+        // Monitor signals automatically
+        $monitor("Time=%0t | reset=%b | regwrite=%b | write_reg=%0d | write_data=%0d | read_reg1=%0d | read_reg2=%0d | read_data1=%0d | read_data2=%0d",
+                 $time, reset, regwrite, write_reg, write_data, read_reg_num1, read_reg_num2, read_data1, read_data2);
+
+
+        // Step 1: Apply reset
+        #10 reset = 0;
+
+        // Step 2: Write value 10 to register x5
+        #10 regwrite = 1;
+        write_reg = 5;
+        write_data = 10;    // simple value
+        #10 regwrite = 0;
+
+
+        // Step 3: Read register x5
+        read_reg_num1 = 5;
+
+
+        // Step 4: Try writing to x0 (should not change)
+        #10 regwrite = 1;
+        write_reg = 0;
+        write_data = 99;    // this should be ignored
+        #10 regwrite = 0;
+        read_reg_num1 = 0;
+
+
+        // Step 5: Write value 25 to x10
+        #10 regwrite = 1;
+        write_reg = 10;
+        write_data = 25;    // simple value
+        #10 regwrite = 0;
+        read_reg_num1 = 10;
+
+
+        // Step 6: Read x5 and x10 together
+        #10 read_reg_num1 = 5;
+        read_reg_num2 = 10;
+
+        // Finish simulation
+        #20 $finish;
+    end
+
+endmodule
+
+
+
+####################################################################
+################## Design Code - ALU #########################
+####################################################################
+
+module ALU (in1, in2, result, alu_control, zero_flag);
+
+input [31:0] in1, in2;           // data inputs
+input [2:0] alu_control;         // control for operation selection
+output reg [31:0] result;        // output of ALU
+output reg zero_flag;            // flag if beq, blt, bge TRUE
+
+always @(*) begin
+    // Default assignment (prevents latches)
+    result = 32'b0;
+
+    case (alu_control)
+        3'b000: result = in1 & in2; // AND
+        3'b001: result = in1 | in2; // OR
+        3'b010: result = in1 + in2; // ADD
+        3'b110: result = in1 - in2; // SUB
+
+        3'b011: begin               // A == B
+            if (in1 == in2)
+                result = 32'b0;
+            else
+                result = 32'b1;     // better than 'x'
+        end
+
+        default: result = 32'b0;    // DEFAULT CASE
+    endcase
+
+    // Zero flag logic
+    if (result == 32'b0)
+        zero_flag = 1'b1;
+    else
+        zero_flag = 1'b0;
+end
+
+endmodule
+
+####################################################################
+################## Testbench - ALU #########################
+####################################################################
+
+`timescale 1ns/1ps
+
+module tb_ALU;
+
+// Inputs
+reg [31:0] in1;
+reg [31:0] in2;
+reg [2:0] alu_control;
+
+// Outputs
+wire [31:0] result;
+wire zero_flag;
+
+// Instantiate the ALU
+ALU uut (
+    .in1(in1),
+    .in2(in2),
+    .result(result),
+    .alu_control(alu_control),
+    .zero_flag(zero_flag)
+);
+
+initial begin
+
+    // Test AND
+    in1 = 32'hF0F0F0F0; 
+    in2 = 32'h0F0F0F0F; 
+    alu_control = 3'b000; 
+    #10;
+
+    // Test OR
+    alu_control = 3'b001;
+    #10;
+
+    // Test ADD
+    in1 = 32'd10; 
+    in2 = 32'd15; 
+    alu_control = 3'b010;
+    #10;
+
+    // Test SUB (non-zero)
+    in1 = 32'd20; 
+    in2 = 32'd5; 
+    alu_control = 3'b110;
+    #10;
+
+    // Test SUB (zero result)
+    in1 = 32'd10; 
+    in2 = 32'd10; 
+    alu_control = 3'b110;
+    #10;
+
+    // Test Equality (A == B)
+    alu_control = 3'b011;
+    #10;
+
+    // Test Equality (A != B)
+    in1 = 32'd8; 
+    in2 = 32'd3; 
+    alu_control = 3'b011;
+    #10;
+
+    // Edge case: zero inputs
+    in1 = 32'd0;
+    in2 = 32'd0;
+    alu_control = 3'b010; // ADD
+    #10;
+
+    // Finish simulation
+    $finish;
+end
+
+endmodule
