@@ -1,0 +1,437 @@
+`timescale 1ns / 1ps
+
+// ============================================================
+//  Data Memory Module (32-bit word, byte-addressable, 1 KB)
+//  Source: Data_Memory_32bit.v  — unchanged from your file
+// ============================================================
+module data_mem (
+    input             clk,
+    input             mem_read,
+    input             mem_write,
+    input      [31:0] address,
+    input      [31:0] data_in,
+    output reg [31:0] data_out
+);
+    reg [7:0] memory [1023:0];
+
+    // Pre-load memory with sequential values so LOAD tests have
+    // something meaningful to read (word address N holds value N*10)
+    integer idx;
+    initial begin
+        for (idx = 0; idx < 256; idx = idx + 1) begin
+            memory[idx*4]     =  (idx * 10)        & 8'hFF;
+            memory[idx*4 + 1] = ((idx * 10) >>  8) & 8'hFF;
+            memory[idx*4 + 2] = ((idx * 10) >> 16) & 8'hFF;
+            memory[idx*4 + 3] = ((idx * 10) >> 24) & 8'hFF;
+        end
+    end
+
+    always @(posedge clk) begin
+        if (mem_write) begin
+            memory[address]     <= data_in[7:0];
+            memory[address + 1] <= data_in[15:8];
+            memory[address + 2] <= data_in[23:16];
+            memory[address + 3] <= data_in[31:24];
+        end
+        if (mem_read) begin
+            data_out[7:0]   <= memory[address];
+            data_out[15:8]  <= memory[address + 1];
+            data_out[23:16] <= memory[address + 2];
+            data_out[31:24] <= memory[address + 3];
+        end
+    end
+endmodule
+
+
+// ============================================================
+//  Register File (32 x 32-bit, synchronous write, async read)
+//  Source: ALU & Register File (2).txt — unchanged from your file
+// ============================================================
+module REG_FILE (
+    input      [4:0]  read_reg_num1,
+    input      [4:0]  read_reg_num2,
+    input      [4:0]  write_reg,
+    input      [31:0] write_data,
+    output     [31:0] read_data1,
+    output     [31:0] read_data2,
+    input             regwrite,
+    input             clock,
+    input             reset
+);
+    reg [31:0] reg_memory [31:0];
+
+    always @(posedge clock or posedge reset) begin
+        if (reset) begin
+            // On reset all registers start at 0
+            // (task says "registers cleared to zero")
+            reg_memory[0]  <= 32'd0;  reg_memory[1]  <= 32'd0;
+            reg_memory[2]  <= 32'd0;  reg_memory[3]  <= 32'd0;
+            reg_memory[4]  <= 32'd0;  reg_memory[5]  <= 32'd0;
+            reg_memory[6]  <= 32'd0;  reg_memory[7]  <= 32'd0;
+            reg_memory[8]  <= 32'd0;  reg_memory[9]  <= 32'd0;
+            reg_memory[10] <= 32'd0;  reg_memory[11] <= 32'd0;
+            reg_memory[12] <= 32'd0;  reg_memory[13] <= 32'd0;
+            reg_memory[14] <= 32'd0;  reg_memory[15] <= 32'd0;
+            reg_memory[16] <= 32'd0;  reg_memory[17] <= 32'd0;
+            reg_memory[18] <= 32'd0;  reg_memory[19] <= 32'd0;
+            reg_memory[20] <= 32'd0;  reg_memory[21] <= 32'd0;
+            reg_memory[22] <= 32'd0;  reg_memory[23] <= 32'd0;
+            reg_memory[24] <= 32'd0;  reg_memory[25] <= 32'd0;
+            reg_memory[26] <= 32'd0;  reg_memory[27] <= 32'd0;
+            reg_memory[28] <= 32'd0;  reg_memory[29] <= 32'd0;
+            reg_memory[30] <= 32'd0;  reg_memory[31] <= 32'd0;
+        end
+        else if (regwrite && (write_reg != 5'd0)) begin
+            reg_memory[write_reg] <= write_data;
+        end
+    end
+
+    assign read_data1 = reg_memory[read_reg_num1];
+    assign read_data2 = reg_memory[read_reg_num2];
+endmodule
+
+
+// ============================================================
+//  ALU (AND / OR / ADD / SUB / EQ)
+//  Source: ALU & Register File (2).txt — unchanged from your file
+// ============================================================
+module ALU (
+    input      [31:0] in1,
+    input      [31:0] in2,
+    input      [2:0]  alu_control,
+    output reg [31:0] result,
+    output reg        zero_flag
+);
+    always @(*) begin
+        result = 32'b0;
+        case (alu_control)
+            3'b000: result = in1 & in2;
+            3'b001: result = in1 | in2;
+            3'b010: result = in1 + in2;
+            3'b110: result = in1 - in2;
+            3'b011: result = (in1 == in2) ? 32'b0 : 32'b1;
+            default: result = 32'b0;
+        endcase
+        zero_flag = (result == 32'b0) ? 1'b1 : 1'b0;
+    end
+endmodule
+
+
+// ============================================================
+//  Memory Access Unit  (MAU)
+//  Integrates REG_FILE + data_mem + ALU
+//
+//  Supported op_code values:
+//    2'b00  = LOAD  (LW)   : reg[dest] <- mem[address]
+//    2'b01  = STORE (SW)   : mem[address] <- reg[src1]
+//    2'b10  = ALU_OP       : reg[dest] <- ALU(reg[src1], reg[src2])
+//    2'b11  = ALU_STORE    : mem[address] <- ALU(reg[src1], reg[src2])
+//                            (used for the mixed LOAD→ALU→STORE sequence)
+// ============================================================
+module MAU (
+    input             clk,
+    input             reset,
+    // Instruction fields
+    input      [1:0]  op_code,    // operation selector (see above)
+    input      [4:0]  src1,       // source register 1
+    input      [4:0]  src2,       // source register 2
+    input      [4:0]  dest,       // destination register
+    input      [31:0] address,    // memory address (byte-aligned)
+    input      [2:0]  alu_ctrl,   // ALU control bits
+    // Observation outputs (for testbench monitoring)
+    output     [31:0] reg_out1,   // value of src1 register
+    output     [31:0] reg_out2,   // value of src2 register
+    output reg [31:0] mem_data_out // last data read from memory
+);
+
+    // ---- Internal wires ----
+    wire [31:0] rf_read1, rf_read2;
+    wire [31:0] alu_result;
+    wire        alu_zero;
+
+    // Register-file control
+    reg         regwrite;
+    reg  [4:0]  rf_write_reg;
+    reg  [31:0] rf_write_data;
+
+    // Data-memory control
+    reg         mem_read;
+    reg         mem_write;
+    reg  [31:0] dm_data_in;
+
+    // ---- Sub-module instantiation ----
+    REG_FILE rf (
+        .read_reg_num1 (src1),
+        .read_reg_num2 (src2),
+        .write_reg     (rf_write_reg),
+        .write_data    (rf_write_data),
+        .read_data1    (rf_read1),
+        .read_data2    (rf_read2),
+        .regwrite      (regwrite),
+        .clock         (clk),
+        .reset         (reset)
+    );
+
+    ALU alu (
+        .in1        (rf_read1),
+        .in2        (rf_read2),
+        .alu_control(alu_ctrl),
+        .result     (alu_result),
+        .zero_flag  (alu_zero)
+    );
+
+    data_mem dm (
+        .clk      (clk),
+        .mem_read (mem_read),
+        .mem_write(mem_write),
+        .address  (address),
+        .data_in  (dm_data_in),
+        .data_out (mem_data_out)
+    );
+
+    assign reg_out1 = rf_read1;
+    assign reg_out2 = rf_read2;
+
+    // ---- Control logic (combinational decode) ----
+    always @(*) begin
+        // Defaults — prevent latches
+        regwrite     = 1'b0;
+        mem_read     = 1'b0;
+        mem_write    = 1'b0;
+        rf_write_reg  = dest;
+        rf_write_data = 32'b0;
+        dm_data_in    = 32'b0;
+
+        case (op_code)
+            // --------------------------------------------------
+            // LOAD: mem_read → latch data_out one cycle later
+            // The register is written on the NEXT posedge (via dm
+            // synchronous read); we feed mem_data_out back to RF.
+            // --------------------------------------------------
+            2'b00: begin
+                mem_read      = 1'b1;
+                regwrite      = 1'b1;        // write on same posedge
+                rf_write_reg  = dest;
+                rf_write_data = mem_data_out; // data from PREVIOUS read
+            end
+
+            // --------------------------------------------------
+            // STORE: write src1 register value to memory
+            // --------------------------------------------------
+            2'b01: begin
+                mem_write  = 1'b1;
+                dm_data_in = rf_read1;
+            end
+
+            // --------------------------------------------------
+            // ALU_OP: compute and write result to dest register
+            // --------------------------------------------------
+            2'b10: begin
+                regwrite      = 1'b1;
+                rf_write_reg  = dest;
+                rf_write_data = alu_result;
+            end
+
+            // --------------------------------------------------
+            // ALU_STORE: compute ALU result, store to memory
+            // (used in mixed sequence)
+            // --------------------------------------------------
+            2'b11: begin
+                mem_write  = 1'b1;
+                dm_data_in = alu_result;
+            end
+
+            default: ;
+        endcase
+    end
+
+endmodule
+
+
+// ============================================================
+//  Testbench for the complete MAU system
+//
+//  Test plan
+//  ---------
+//  T1: LOAD  word from mem[0]  → reg[1]       (mem[0]  = 0)
+//  T2: LOAD  word from mem[4]  → reg[2]       (mem[4]  = 10)
+//  T3: STORE reg[2] (=10) → mem[8]
+//  T4: STORE reg[1] (=0)  → mem[12]
+//  T5: Mixed — LOAD mem[20] → reg[3]  (=50)
+//              LOAD mem[24] → reg[4]  (=60)
+//              ALU_OP ADD reg[3]+reg[4] → reg[5]  (=110)
+//              ALU_STORE ADD reg[3]+reg[4] → mem[100]
+// ============================================================
+module MAU_TB;
+
+    // ---- DUT signals ----
+    reg         clk, reset;
+    reg  [1:0]  op_code;
+    reg  [4:0]  src1, src2, dest;
+    reg  [31:0] address;
+    reg  [2:0]  alu_ctrl;
+    wire [31:0] reg_out1, reg_out2, mem_data_out;
+
+    // ---- Instantiate DUT ----
+    MAU dut (
+        .clk         (clk),
+        .reset       (reset),
+        .op_code     (op_code),
+        .src1        (src1),
+        .src2        (src2),
+        .dest        (dest),
+        .address     (address),
+        .alu_ctrl    (alu_ctrl),
+        .reg_out1    (reg_out1),
+        .reg_out2    (reg_out2),
+        .mem_data_out(mem_data_out)
+    );
+
+    // ---- Clock: 10 ns period ----
+    initial clk = 0;
+    always  #5 clk = ~clk;
+
+    // ---- Helper task: apply one operation for one clock cycle ----
+    task apply_op;
+        input [1:0]  opc;
+        input [4:0]  r1, r2, rd;
+        input [31:0] addr;
+        input [2:0]  ac;
+        input [63:0] label_unused; // just for readability at call site
+        begin
+            op_code  = opc;
+            src1     = r1;
+            src2     = r2;
+            dest     = rd;
+            address  = addr;
+            alu_ctrl = ac;
+            @(posedge clk); #1; // settle after posedge
+        end
+    endtask
+
+    integer errors;
+
+    initial begin
+        errors = 0;
+
+        // ---- Reset ----
+        reset = 1; op_code = 0; src1 = 0; src2 = 0;
+        dest  = 0; address = 0; alu_ctrl = 0;
+        @(posedge clk); @(posedge clk);
+        reset = 0;
+        @(posedge clk);
+
+        $display("\n======================================================");
+        $display("       MAU SYSTEM TESTBENCH RESULTS");
+        $display("======================================================\n");
+
+        // ==============================================================
+        // T1: LOAD from mem[0]  →  reg[1]
+        //     mem[0] was initialised to 0*10 = 0
+        // ==============================================================
+        $display("--- T1: LOAD mem[0x0000] -> reg[1] ---");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd1, 32'h0000, 3'b000, "T1_LOAD_A");
+        // Second cycle to latch the synchronous read result into register
+        apply_op(2'b00, 5'd0, 5'd0, 5'd1, 32'h0000, 3'b000, "T1_LOAD_B");
+        $display("  mem_data_out = %0d  (expected 0)", mem_data_out);
+        $display("  reg[1] via reg_out1: reading src1=1 next op will show it\n");
+
+        // ==============================================================
+        // T2: LOAD from mem[4]  →  reg[2]
+        //     mem[4] was initialised to 1*10 = 10
+        // ==============================================================
+        $display("--- T2: LOAD mem[0x0004] -> reg[2] ---");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd2, 32'h0004, 3'b000, "T2_LOAD_A");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd2, 32'h0004, 3'b000, "T2_LOAD_B");
+        $display("  mem_data_out = %0d  (expected 10)", mem_data_out);
+
+        // Read back reg[2] by pointing src1 at it (ALU_OP NOP: ADD 0)
+        apply_op(2'b10, 5'd2, 5'd0, 5'd0, 32'h0, 3'b010, "read_reg2");
+        $display("  reg[2] = %0d  (expected 10)\n", reg_out1);
+        if (reg_out1 !== 32'd10) begin
+            $display("  FAIL: reg[2] mismatch"); errors = errors + 1;
+        end else $display("  PASS");
+
+        // ==============================================================
+        // T3: STORE reg[2] (10) → mem[8]
+        // ==============================================================
+        $display("\n--- T3: STORE reg[2]=10 -> mem[0x0008] ---");
+        apply_op(2'b01, 5'd2, 5'd0, 5'd0, 32'h0008, 3'b000, "T3_STORE");
+        // Read back with LOAD to verify
+        apply_op(2'b00, 5'd0, 5'd0, 5'd6, 32'h0008, 3'b000, "T3_VER_A");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd6, 32'h0008, 3'b000, "T3_VER_B");
+        $display("  mem_data_out after LOAD from mem[8] = %0d  (expected 10)", mem_data_out);
+        if (mem_data_out !== 32'd10) begin
+            $display("  FAIL"); errors = errors + 1;
+        end else $display("  PASS");
+
+        // ==============================================================
+        // T4: STORE reg[1] (0) → mem[12]
+        // ==============================================================
+        $display("\n--- T4: STORE reg[1]=0 -> mem[0x000C] ---");
+        apply_op(2'b01, 5'd1, 5'd0, 5'd0, 32'h000C, 3'b000, "T4_STORE");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd7, 32'h000C, 3'b000, "T4_VER_A");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd7, 32'h000C, 3'b000, "T4_VER_B");
+        $display("  mem_data_out after LOAD from mem[12] = %0d  (expected 0)", mem_data_out);
+        if (mem_data_out !== 32'd0) begin
+            $display("  FAIL"); errors = errors + 1;
+        end else $display("  PASS");
+
+        // ==============================================================
+        // T5: Mixed sequence
+        //   Step A: LOAD mem[20]  →  reg[3]   (word index 5 → 5*10=50)
+        //   Step B: LOAD mem[24]  →  reg[4]   (word index 6 → 6*10=60)
+        //   Step C: ALU_OP  ADD reg[3]+reg[4]  →  reg[5]   (=110)
+        //   Step D: ALU_STORE ADD reg[3]+reg[4]→  mem[100] (=110)
+        //   Step E: LOAD mem[100] →  reg[6]  verify =110
+        // ==============================================================
+        $display("\n--- T5: Mixed LOAD -> ALU ADD -> STORE sequence ---");
+
+        // Step A
+        $display("  Step A: LOAD mem[20] -> reg[3]  (expect 50)");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd3, 32'd20, 3'b000, "T5_LA");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd3, 32'd20, 3'b000, "T5_LA2");
+        $display("  mem_data_out = %0d", mem_data_out);
+
+        // Step B
+        $display("  Step B: LOAD mem[24] -> reg[4]  (expect 60)");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd4, 32'd24, 3'b000, "T5_LB");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd4, 32'd24, 3'b000, "T5_LB2");
+        $display("  mem_data_out = %0d", mem_data_out);
+
+        // Step C: ALU ADD reg[3] + reg[4] -> reg[5]
+        $display("  Step C: ALU ADD reg[3]+reg[4] -> reg[5]  (expect 110)");
+        apply_op(2'b10, 5'd3, 5'd4, 5'd5, 32'd0, 3'b010, "T5_ALU");
+        apply_op(2'b10, 5'd5, 5'd0, 5'd0, 32'd0, 3'b010, "T5_RD5");
+        $display("  reg[5] = %0d  (expected 110)", reg_out1);
+        if (reg_out1 !== 32'd110) begin
+            $display("  FAIL: reg[5] mismatch"); errors = errors + 1;
+        end else $display("  PASS");
+
+        // Step D: ALU_STORE ADD reg[3]+reg[4] → mem[100]
+        $display("  Step D: ALU_STORE reg[3]+reg[4] -> mem[100]");
+        apply_op(2'b11, 5'd3, 5'd4, 5'd0, 32'd100, 3'b010, "T5_AS");
+
+        // Step E: LOAD mem[100] -> reg[6], verify = 110
+        $display("  Step E: LOAD mem[100] -> reg[6]  (expect 110)");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd6, 32'd100, 3'b000, "T5_VE_A");
+        apply_op(2'b00, 5'd0, 5'd0, 5'd6, 32'd100, 3'b000, "T5_VE_B");
+        $display("  mem_data_out = %0d  (expected 110)", mem_data_out);
+        if (mem_data_out !== 32'd110) begin
+            $display("  FAIL: memory store/load mismatch"); errors = errors + 1;
+        end else $display("  PASS");
+
+        // ==============================================================
+        // Summary
+        // ==============================================================
+        $display("\n======================================================");
+        if (errors == 0)
+            $display("  ALL TESTS PASSED  (errors = 0)");
+        else
+            $display("  TESTS COMPLETED WITH %0d ERROR(S)", errors);
+        $display("======================================================\n");
+
+        $finish;
+    end
+
+endmodule

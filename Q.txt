@@ -1,0 +1,308 @@
+// =============================================================
+// CE222 Lab Final – Question 1
+// Execute Stage: Instruction Decode + Register File + ALU
+// =============================================================
+
+`timescale 1ns / 1ps
+
+// =============================================================
+// MODULE 1: REGISTER FILE
+// (Adapted from REG_FILE in ALU & Register File lab)
+// 32 registers × 32-bit, synchronous write, async read
+// Reset: all registers initialized to 0
+// =============================================================
+module REG_FILE(
+    input        clock,
+    input        reset,
+    input  [4:0] read_reg_num1,   // rs1
+    input  [4:0] read_reg_num2,   // rs2
+    input  [4:0] write_reg,       // rd
+    input [31:0] write_data,      // ALU result
+    input        regwrite,        // write enable
+    output [31:0] read_data1,
+    output [31:0] read_data2
+);
+    reg [31:0] reg_memory [31:0];
+    integer i;
+
+    always @(posedge clock or posedge reset) begin
+        if (reset) begin
+            // Initialize ALL registers to 0 on reset
+            for (i = 0; i < 32; i = i + 1)
+                reg_memory[i] <= 32'd0;
+        end
+        else if (regwrite && (write_reg != 5'd0)) begin
+            // x0 is hardwired to 0, never written
+            reg_memory[write_reg] <= write_data;
+        end
+    end
+
+    // Asynchronous (combinational) reads
+    assign read_data1 = reg_memory[read_reg_num1];
+    assign read_data2 = reg_memory[read_reg_num2];
+
+endmodule
+
+
+// =============================================================
+// MODULE 2: ALU
+// (Adapted from ALU lab, extended with XOR)
+// alu_control encoding:
+//   3'b000 = AND
+//   3'b001 = OR
+//   3'b010 = ADD
+//   3'b110 = SUB
+//   3'b100 = XOR  (new)
+// =============================================================
+module ALU(
+    input  [31:0] in1,
+    input  [31:0] in2,
+    input  [2:0]  alu_control,
+    output reg [31:0] result,
+    output reg        zero_flag
+);
+    always @(*) begin
+        result = 32'b0;     // safe default – prevents latches
+
+        case (alu_control)
+            3'b010: result = in1 + in2;          // ADD
+            3'b110: result = in1 - in2;          // SUB
+            3'b000: result = in1 & in2;          // AND
+            3'b001: result = in1 | in2;          // OR
+            3'b100: result = in1 ^ in2;          // XOR
+            default: result = 32'b0;
+        endcase
+
+        zero_flag = (result == 32'b0) ? 1'b1 : 1'b0;
+    end
+endmodule
+
+
+// =============================================================
+// MODULE 3: CONTROL UNIT
+// Maps the 6-bit opcode (bits [31:26]) to a 3-bit alu_control
+// and the regwrite enable signal.
+//
+// Opcode table (chosen for this design):
+//   6'b000010 = ADD
+//   6'b000110 = SUB
+//   6'b000000 = AND
+//   6'b000001 = OR
+//   6'b000100 = XOR
+// =============================================================
+module CONTROL_UNIT(
+    input  [5:0] opcode,
+    output reg [2:0] alu_control,
+    output reg       regwrite
+);
+    always @(*) begin
+        regwrite    = 1'b1;     // default: result will be written back
+        alu_control = 3'b010;   // default: ADD
+
+        case (opcode)
+            6'b000010: begin alu_control = 3'b010; regwrite = 1'b1; end  // ADD
+            6'b000110: begin alu_control = 3'b110; regwrite = 1'b1; end  // SUB
+            6'b000000: begin alu_control = 3'b000; regwrite = 1'b1; end  // AND
+            6'b000001: begin alu_control = 3'b001; regwrite = 1'b1; end  // OR
+            6'b000100: begin alu_control = 3'b100; regwrite = 1'b1; end  // XOR
+            default:   begin alu_control = 3'b010; regwrite = 1'b0; end  // NOP
+        endcase
+    end
+endmodule
+
+
+// =============================================================
+// MODULE 4: TOP MODULE – EXECUTE STAGE
+//
+// HOW IT WORKS (step-by-step on every posedge clk):
+//
+//  STEP 1 – DECODE
+//    The 32-bit instruction bus is sliced:
+//      opcode = instruction[31:26]
+//      rs1    = instruction[25:21]
+//      rs2    = instruction[20:16]
+//      rd     = instruction[15:11]
+//
+//  STEP 2 – CONTROL
+//    The CONTROL_UNIT takes the opcode and outputs:
+//      • alu_control  – which ALU operation to perform
+//      • regwrite     – whether to write the result back
+//
+//  STEP 3 – REGISTER READ
+//    The REGISTER FILE reads rs1 and rs2 combinationally
+//    (async read), giving operands A and B to the ALU.
+//
+//  STEP 4 – EXECUTE (ALU)
+//    The ALU computes result = A op B (fully combinational).
+//
+//  STEP 5 – WRITE BACK
+//    On the next positive clock edge the REG_FILE writes
+//    alu_result into register rd (if regwrite == 1 and rd ≠ 0).
+//
+//  The combinational paths (Decode → Control → Reg Read → ALU)
+//  all settle within one clock cycle; the only sequential
+//  element is the register-file write-back.
+// =============================================================
+module EXECUTE_STAGE(
+    input        clk,
+    input        reset,
+    input [31:0] instruction    // full 32-bit instruction word
+);
+    // ----- Decode wires -----
+    wire [5:0]  opcode;
+    wire [4:0]  rs1, rs2, rd;
+
+    assign opcode = instruction[31:26];
+    assign rs1    = instruction[25:21];
+    assign rs2    = instruction[20:16];
+    assign rd     = instruction[15:11];
+
+    // ----- Control signals -----
+    wire [2:0] alu_control;
+    wire       regwrite;
+
+    // ----- Data paths -----
+    wire [31:0] read_data1, read_data2;
+    wire [31:0] alu_result;
+    wire        zero_flag;
+
+    // ----- Sub-module instantiations -----
+
+    CONTROL_UNIT ctrl (
+        .opcode      (opcode),
+        .alu_control (alu_control),
+        .regwrite    (regwrite)
+    );
+
+    REG_FILE regfile (
+        .clock         (clk),
+        .reset         (reset),
+        .read_reg_num1 (rs1),
+        .read_reg_num2 (rs2),
+        .write_reg     (rd),
+        .write_data    (alu_result),
+        .regwrite      (regwrite),
+        .read_data1    (read_data1),
+        .read_data2    (read_data2)
+    );
+
+    ALU alu (
+        .in1         (read_data1),
+        .in2         (read_data2),
+        .alu_control (alu_control),
+        .result      (alu_result),
+        .zero_flag   (zero_flag)
+    );
+
+endmodule
+
+
+// =============================================================
+// TESTBENCH
+// Tests 5 instructions: ADD, SUB, AND, OR, XOR
+//
+// Instruction format:
+//   [31:26] opcode  [25:21] rs1  [20:16] rs2  [15:11] rd
+//
+// Seed register values (from REG_FILE reset): reg[N] = 0
+// We first do two initialisation write-back cycles so that
+// rs1/rs2 registers hold interesting non-zero values, then
+// run the five operation instructions.
+// =============================================================
+module tb_EXECUTE_STAGE;
+
+    reg        clk;
+    reg        reset;
+    reg [31:0] instruction;
+
+    // Instantiate top module
+    EXECUTE_STAGE uut (
+        .clk         (clk),
+        .reset       (reset),
+        .instruction (instruction)
+    );
+
+    // Clock: 10 ns period
+    always #5 clk = ~clk;
+
+    // Helper task: display register-file state via hierarchical path
+    task show_reg;
+        input [4:0] r;
+        begin
+            $display("  reg[%0d] = %0d (0x%08h)", r,
+                     uut.regfile.reg_memory[r],
+                     uut.regfile.reg_memory[r]);
+        end
+    endtask
+
+    // Build instruction word from fields
+    function [31:0] make_instr;
+        input [5:0] op;
+        input [4:0] r1, r2, rd_f;
+        begin
+            make_instr = {op, r1, r2, rd_f, 11'b0};
+        end
+    endfunction
+
+    initial begin
+        clk   = 0;
+        reset = 1;
+        instruction = 32'b0;
+
+        // ── Reset for 2 cycles ──────────────────────────────
+        #20;
+        reset = 0;
+
+        // ── Pre-load r1=50, r2=30 via ADD with itself ──────
+        // We manually set values by writing to reg[1] and reg[2]
+        // using ADD x1, x0, x0 won't help (x0=0).
+        // Instead: use the regwrite path directly by issuing
+        // instructions that load known values.
+        //
+        // Strategy: use instruction with opcode NOP (6'b111111)
+        // to skip, then directly force via $deposit (simulator).
+        // For clarity in synthesis-agnostic test we use $deposit:
+        uut.regfile.reg_memory[1]  = 32'd50;   // rs1 source A
+        uut.regfile.reg_memory[2]  = 32'd30;   // rs2 source B
+        uut.regfile.reg_memory[3]  = 32'hFF00; // for AND/OR/XOR
+        uut.regfile.reg_memory[4]  = 32'h0F0F; // for AND/OR/XOR
+
+        $display("\n===== CE222 Q1 – Execute Stage Test =====");
+        $display("Initial values: reg[1]=50, reg[2]=30, reg[3]=0xFF00, reg[4]=0x0F0F\n");
+
+        // ── TEST 1: ADD  rd=r10, rs1=r1, rs2=r2  (50+30=80) ──
+        #10;
+        instruction = make_instr(6'b000010, 5'd1, 5'd2, 5'd10);
+        #10;   // one clock: ALU computes 80, write-back to r10
+        $display("[T1] ADD  r10 = r1 + r2 = 50 + 30");
+        show_reg(10);
+
+        // ── TEST 2: SUB  rd=r11, rs1=r1, rs2=r2  (50-30=20) ──
+        instruction = make_instr(6'b000110, 5'd1, 5'd2, 5'd11);
+        #10;
+        $display("[T2] SUB  r11 = r1 - r2 = 50 - 30");
+        show_reg(11);
+
+        // ── TEST 3: AND  rd=r12, rs1=r3, rs2=r4  (0xFF00 & 0x0F0F) ──
+        instruction = make_instr(6'b000000, 5'd3, 5'd4, 5'd12);
+        #10;
+        $display("[T3] AND  r12 = r3 & r4  (0xFF00 & 0x0F0F = 0x0F00)");
+        show_reg(12);
+
+        // ── TEST 4: OR   rd=r13, rs1=r3, rs2=r4  (0xFF00 | 0x0F0F) ──
+        instruction = make_instr(6'b000001, 5'd3, 5'd4, 5'd13);
+        #10;
+        $display("[T4] OR   r13 = r3 | r4  (0xFF00 | 0x0F0F = 0xFF0F)");
+        show_reg(13);
+
+        // ── TEST 5: XOR  rd=r14, rs1=r3, rs2=r4  (0xFF00 ^ 0x0F0F) ──
+        instruction = make_instr(6'b000100, 5'd3, 5'd4, 5'd14);
+        #10;
+        $display("[T5] XOR  r14 = r3 ^ r4  (0xFF00 ^ 0x0F0F = 0xF00F)");
+        show_reg(14);
+
+        $display("\n===== Simulation Complete =====\n");
+        #10 $finish;
+    end
+
+endmodule
